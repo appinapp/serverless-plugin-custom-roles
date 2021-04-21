@@ -9,6 +9,17 @@ const CustomRoles = require('../index');
 chai.use(chaiSubset);
 const expect = chai.expect;
 
+const VPC_POLICY = {
+  'Fn::Join': [
+    '',
+    [
+      'arn:',
+      { Ref: 'AWS::Partition' },
+      ':iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole',
+    ],
+  ],
+};
+
 function createTestInstance(options) {
   options = options || {}; // eslint-disable-line no-param-reassign
 
@@ -43,7 +54,8 @@ function createTestInstance(options) {
           }
         }
       };
-    }
+    },
+    configSchemaHandler: options.configSchemaHandler || {}
   }, {
     stage: options.stage || 'dev'
   });
@@ -66,6 +78,23 @@ describe('serverless-plugin-custom-roles', function() {
       instance.hooks['before:package:setupProviderConfiguration']();
 
       sinon.assert.calledOnce(stub);
+    });
+
+    it('should not add validation for serverless@1', function() {
+      expect(() => createTestInstance({ configSchemaHandler: {} }))
+        .to.not.throw();
+    });
+
+    it('should add validation for serverless@2', function() {
+      const stub = sinon.stub();
+
+      createTestInstance({
+        configSchemaHandler: {
+          defineFunctionProperties: stub
+        }
+      });
+
+      sinon.assert.calledOnceWithExactly(stub, 'aws', sinon.match.object);
     });
   });
 
@@ -571,6 +600,82 @@ describe('serverless-plugin-custom-roles', function() {
             }
           }
         });
+
+      sinon.assert.notCalled(instance.serverless.cli.log);
+    });
+
+    it('should add vpc policy when function has vpc configuration', function() {
+      const instance = createTestInstance({
+        functions: {
+          function1: {
+            vpc: {
+              securityGroupIds: ['securityGroupId1']
+            }
+          }
+        }
+      });
+
+      instance.createRoles();
+
+      expect(instance)
+        .to.have.nested.property('serverless.service.resources')
+        .that.containSubset({
+          Resources: {
+            Function1LambdaFunctionRole: {
+              Type: 'AWS::IAM::Role',
+              Properties: {
+                ManagedPolicyArns: [VPC_POLICY]
+              }
+            }
+          }
+        });
+
+      sinon.assert.notCalled(instance.serverless.cli.log);
+    });
+
+    it('should add vpc policy when provider has vpc configuration', function() {
+      const instance = createTestInstance({
+        provider: {
+          vpc: {
+            securityGroupIds: ['securityGroupId1']
+          }
+        },
+        functions: {
+          function1: {}
+        }
+      });
+
+      instance.createRoles();
+
+      expect(instance)
+        .to.have.nested.property('serverless.service.resources')
+        .that.containSubset({
+          Resources: {
+            Function1LambdaFunctionRole: {
+              Type: 'AWS::IAM::Role',
+              Properties: {
+                ManagedPolicyArns: [VPC_POLICY]
+              }
+            }
+          }
+        });
+
+      sinon.assert.notCalled(instance.serverless.cli.log);
+    });
+
+    it('should not add vpc policy when vpc is not configured', function() {
+      const instance = createTestInstance({
+        provider: {},
+        functions: {
+          function1: {}
+        }
+      });
+
+      instance.createRoles();
+
+      expect(instance)
+        .to.have.nested.property('serverless.service.resources.Resources.Function1LambdaFunctionRole.Properties')
+        .that.does.not.have.property('ManagedPolicyArns');
 
       sinon.assert.notCalled(instance.serverless.cli.log);
     });

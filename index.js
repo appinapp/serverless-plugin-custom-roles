@@ -3,6 +3,23 @@
 const semver = require('semver');
 const set = require('lodash.set');
 
+const FUNCTION_SCHEMA = {
+  properties: {
+    iamRoleStatements: { type: 'array' }
+  }
+};
+
+const VPC_POLICY = {
+  'Fn::Join': [
+    '',
+    [
+      'arn:',
+      { Ref: 'AWS::Partition' },
+      ':iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole',
+    ],
+  ],
+};
+
 class CustomRoles {
   constructor(serverless, options) {
     if (!semver.satisfies(serverless.version, '>= 1.12')) {
@@ -15,6 +32,8 @@ class CustomRoles {
     this.hooks = {
       'before:package:setupProviderConfiguration': () => this.createRoles()
     };
+
+    this.addValidation();
   }
 
   log(message) {
@@ -135,8 +154,8 @@ class CustomRoles {
     return this.getPolicyFromStatements('streams', statements);
   }
 
-  getRole(stackName, functionName, policies) {
-    return {
+  getRole(stackName, functionName, policies, managedPolicies) {
+    const role = {
       Type: 'AWS::IAM::Role',
       Properties: {
         AssumeRolePolicyDocument: {
@@ -152,6 +171,12 @@ class CustomRoles {
         Policies: policies
       }
     };
+
+    if (managedPolicies && managedPolicies.length) {
+      role.Properties.ManagedPolicyArns = managedPolicies;
+    }
+
+    return role;
   }
 
   getRoleId(functionName) {
@@ -175,7 +200,9 @@ class CustomRoles {
       const functionObj = service.getFunction(functionName);
       const roleId = this.getRoleId(functionName);
 
+      const managedPolicies = [];
       const policies = [this.getLoggingPolicy(functionObj.name)];
+
       if (sharedPolicy) {
         policies.push(sharedPolicy);
       }
@@ -190,11 +217,22 @@ class CustomRoles {
         policies.push(streamsPolicy);
       }
 
-      const roleResource = this.getRole(stackName, functionName, policies);
+      if (service.provider.vpc || functionObj.vpc) {
+        managedPolicies.push(VPC_POLICY);
+      }
+
+      const roleResource = this.getRole(stackName, functionName, policies, managedPolicies);
 
       functionObj.role = roleId;
       set(service, `resources.Resources.${roleId}`, roleResource);
     });
+  }
+
+  addValidation() {
+    if (this.serverless.configSchemaHandler
+      && this.serverless.configSchemaHandler.defineFunctionProperties) {
+      this.serverless.configSchemaHandler.defineFunctionProperties('aws', FUNCTION_SCHEMA);
+    }
   }
 }
 
